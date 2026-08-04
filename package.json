@@ -1,15 +1,21 @@
 {
-  "name": "seo-genius-brain",
-  "version": "2.0.0",
+  "name": "seo-aeo-genius-agent",
+  "version": "1.0.0",
+  "description": "SEO/AEO agent that adds meta tags and schema markup to a GitHub repo's HTML via Gemini 3.6 Flash",
   "main": "server.js",
-  "scripts": { "start": "node server.js" },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
   "dependencies": {
-    "@google/generative-ai": "^0.21.0",
-    "@octokit/rest": "^21.0.0",
+    "express": "^4.19.2",
     "dotenv": "^16.4.5",
-    "express": "^4.21.0",
+    "@google/genai": "^1.0.0",
+    "uuid": "^9.0.1",
     "fs-extra": "^11.2.0",
     "simple-git": "^3.25.0",
-    "uuid": "^10.0.0"
+    "@octokit/rest": "^20.1.1"
   }
 }
