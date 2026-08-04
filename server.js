@@ -19,7 +19,7 @@ const REPOS_DIR = path.join(__dirname, 'repos');
 fs.ensureDirSync(REPOS_DIR);
 
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+const model = genAI.getGenerativeModel({ model: 'gemini-3.6-flash' });
 
 // In‑memory job store
 const jobs = {};
