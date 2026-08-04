@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SEO Autopilot – Autonomous Code Optimizer</title>
+  <style>
+    :root { --bg:#0f1119; --surface:#1a1d2b; --border:#2a2f3d; --text:#e2e4f0; --accent:#6c5ce7; }
+    body { margin:0; padding:20px; font-family:system-ui; background:var(--bg); color:var(--text); }
+    .container { max-width:800px; margin:auto; }
+    h1 { background:linear-gradient(135deg,#6c5ce7,#a78bfa); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+    .card { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:24px; margin:16px 0; }
+    input { padding:12px; width:100%; background:#222636; border:1px solid var(--border); border-radius:8px; color:#fff; font-size:1rem; }
+    .btn { background:var(--accent); color:white; border:none; padding:12px 24px; border-radius:8px; font-weight:600; cursor:pointer; }
+    .log-box { background:#0a0c14; border-radius:8px; padding:16px; height:200px; overflow-y:auto; font-family:monospace; font-size:0.9rem; }
+    .progress { height:6px; background:#2a2f3d; border-radius:3px; margin:12px 0; }
+    .progress-bar { height:100%; background:var(--accent); border-radius:3px; width:0%; transition:width 0.5s; }
+    .status-badge { display:inline-block; padding:4px 12px; border-radius:20px; font-size:0.8rem; font-weight:600; }
+    .status-cloning { background:rgba(245,158,11,0.2); color:#f59e0b; }
+    .status-analyzing { background:rgba(99,102,241,0.2); color:#818cf8; }
+    .status-applying { background:rgba(16,185,129,0.2); color:#10b981; }
+    .status-done { background:rgba(16,185,129,0.2); color:#10b981; }
+    .status-error { background:rgba(239,68,68,0.2); color:#ef4444; }
+    .hidden { display:none; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>🤖 SEO Autopilot</h1>
+  <p style="color:#9ca3b8;">Autonomous code optimisation that edits and deploys your website automatically.</p>
+
+  <div class="card" id="setupCard">
+    <h3>1. Connect your GitHub Repository</h3>
+    <p style="font-size:0.9rem; color:#9ca3b8;">The agent will clone, rewrite SEO files, and push optimisations.</p>
+    <input type="text" id="repoInput" placeholder="https://github.com/your-username/your-repo.git">
+    <label style="display:flex; align-items:center; gap:8px; margin:10px 0;">
+      <input type="checkbox" id="mergeCheckbox"> Merge directly to main (triggers auto‑deploy)
+    </label>
+    <button class="btn" id="startBtn">🚀 Start Optimization</button>
+  </div>
+
+  <div class="card hidden" id="progressCard">
+    <h3>2. Live Progress</h3>
+    <div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+    <div><span class="status-badge" id="statusBadge">Starting...</span></div>
+    <div class="log-box" id="logBox"></div>
+    <div id="resultBox" class="hidden" style="margin-top:12px;"></div>
+  </div>
+</div>
+
+<script>
+  let eventSource;
+  document.getElementById('startBtn').addEventListener('click', async () => {
+    const repoUrl = document.getElementById('repoInput').value.trim();
+    const mergeToMain = document.getElementById('mergeCheckbox').checked;
+    if (!repoUrl) return alert('Please enter your GitHub repository URL');
+    if (!repoUrl.includes('github.com')) return alert('Only GitHub repositories are supported');
+
+    document.getElementById('setupCard').classList.add('hidden');
+    document.getElementById('progressCard').classList.remove('hidden');
+    document.getElementById('logBox').innerHTML = '';
+
+    const res = await fetch('/api/optimize', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ repoUrl, mergeToMain })
+    });
+    const { jobId } = await res.json();
+    listenToJob(jobId);
+  });
+
+  function listenToJob(jobId) {
+    eventSource = new EventSource(`/api/job/${jobId}/stream`);
+    eventSource.addEventListener('progress', (e) => {
+      const data = JSON.parse(e.data);
+      updateStatus(data.status);
+      if (data.log) document.getElementById('logBox').innerHTML += `<div>${data.log}</div>`;
+      document.getElementById('logBox').scrollTop = document.getElementById('logBox').scrollHeight;
+    });
+    eventSource.addEventListener('complete', (e) => {
+      const data = JSON.parse(e.data);
+      eventSource.close();
+      if (data.status === 'done') {
+        updateStatus('done');
+        document.getElementById('resultBox').classList.remove('hidden');
+        document.getElementById('resultBox').innerHTML = `
+          <p>✅ Optimisation pushed to branch: <strong>${data.result.branch}</strong></p>
+          ${data.result.merged ? '<p style="color:#10b981;">🚀 Merged to main – your site is now live with the optimisations!</p>' 
+            : '<p>Review the pull request and merge to deploy.</p>'}
+          <p>Repository: <a href="${data.result.repo}" target="_blank" style="color:#6c5ce7;">${data.result.repo}</a></p>
+        `;
+      } else {
+        updateStatus('error');
+        document.getElementById('logBox').innerHTML += `<div style="color:#ef4444;">❌ ${data.error}</div>`;
+      }
+    });
+  }
+
+  function updateStatus(status) {
+    const badge = document.getElementById('statusBadge');
+    badge.textContent = status;
+    badge.className = 'status-badge status-' + status;
+    const bar = document.getElementById('progressBar');
+    if (status === 'created') bar.style.width = '5%';
+    else if (status === 'cloning') bar.style.width = '20%';
+    else if (status === 'analyzing') bar.style.width = '50%';
+    else if (status === 'applying') bar.style.width = '80%';
+    else if (status === 'done') bar.style.width = '100%';
+    else if (status === 'error') bar.style.width = '100%';
+  }
+</script>
+</body>
+</html>
