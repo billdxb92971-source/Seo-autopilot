@@ -42,8 +42,9 @@ function buildGeniusPrompt(repoPath, repoName) {
         walk(full);
       } else if (entry.isFile()) {
         const ext = path.extname(entry.name).toLowerCase();
-        if (['.html','.css','.js','.md','.txt','.json','.xml'].includes(ext)) {
-          const limit = ext === '.html' ? MAX_FILE_CONTENT_HTML : MAX_FILE_CONTENT_OTHER;
+        // Include common web extensions; you can add more (e.g., .php, .vue, .jsx) if needed
+        if (['.html','.htm','.css','.js','.md','.txt','.json','.xml'].includes(ext)) {
+          const limit = ext === '.html' || ext === '.htm' ? MAX_FILE_CONTENT_HTML : MAX_FILE_CONTENT_OTHER;
           let content = fs.readFileSync(full, 'utf-8');
           if (content.length > limit) {
             content = content.substring(0, limit) + '\n... (truncated) ...';
@@ -124,7 +125,7 @@ function isSafeMod(filePath, newContent) {
   return newContent.length >= original.length * 0.4;
 }
 
-// ──── Main Job ────
+// ──── Main Job (UPDATED with better error handling) ────
 async function runOptimizationJob(jobId, repoUrl, mergeToMain) {
   const job = jobs[jobId];
   if (!job) return;
@@ -143,17 +144,54 @@ async function runOptimizationJob(jobId, repoUrl, mergeToMain) {
     const prompt = buildGeniusPrompt(repoPath, repoName);
     job.log(`Prompt prepared (${prompt.length} chars). Sending to Gemini...`);
     
+    // Increased output tokens and timeout
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 180000); // 3 min
+
     const result = await model.generateContent({
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.3, maxOutputTokens: 10000 },
+      generationConfig: { temperature: 0.3, maxOutputTokens: 20000 },
     });
-    const text = result.response.text();
-    if (!text) throw new Error('Empty AI response');
+    clearTimeout(timeout);
     
-    const data = extractJSONObject(text);
-    if (!data || !data.modifications || !Array.isArray(data.modifications)) {
-      job.log('Raw AI response (first 600 chars): ' + text.substring(0, 600));
-      throw new Error('AI did not return a valid JSON with modifications array');
+    const text = result.response.text();
+    job.log(`Raw AI response length: ${text.length} chars.`);
+    job.log(`Response preview: ${text.substring(0, 1000)}...`);
+
+    if (!text || text.trim().length === 0) {
+      throw new Error('Empty AI response');
+    }
+
+    // Try to extract JSON robustly
+    let data = null;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      data = extractJSONObject(text);
+    }
+
+    if (!data) {
+      // Last resort: try to find a JSON block with regex
+      const jsonMatch = text.match(/(\{[\s\S]*\})/);
+      if (jsonMatch) {
+        try {
+          data = JSON.parse(jsonMatch[1]);
+        } catch (e) {}
+      }
+    }
+
+    if (!data) {
+      throw new Error('Could not extract valid JSON from AI response. Check logs for preview.');
+    }
+
+    if (!data.modifications || !Array.isArray(data.modifications) || data.modifications.length === 0) {
+      job.log('Warning: AI returned modifications array empty or missing. Falling back to report only.');
+      const report = data.strategicReport || 'No report generated.';
+      fs.writeFileSync(path.join(repoPath, 'SEO_STRATEGY_REPORT.txt'), report, 'utf-8');
+      job.log('📄 Strategic report saved, but no modifications were made (AI did not provide any).');
+      job.status = 'done';
+      job.result = { branch: null, repo: repoUrl, merged: false, report };
+      return;
     }
 
     // Save the strategic report
@@ -163,7 +201,11 @@ async function runOptimizationJob(jobId, repoUrl, mergeToMain) {
     job.status = 'applying';
     let applied = 0, skipped = 0;
     for (const mod of data.modifications) {
-      if (!mod.path || typeof mod.content !== 'string') continue;
+      if (!mod.path || typeof mod.content !== 'string') {
+        job.log(`⚠️ Skipped invalid modification entry: ${JSON.stringify(mod)}`);
+        skipped++;
+        continue;
+      }
       const filePath = path.join(repoPath, mod.path);
       if (!isSafeMod(filePath, mod.content)) {
         job.log(`⚠️ Skipped ${mod.path} (safety: too short, possible content deletion)`);
