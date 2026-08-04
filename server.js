@@ -23,12 +23,11 @@ const model = genAI.getGenerativeModel({ model: 'gemini-3.6-flash' });
 
 const jobs = {};
 
-// ──── Genius Prompt – Only Schema & Meta, No Content Changes ────
+// ──── FOCUSED PROMPT – ONLY HTML FILES, SMALLER CONTEXT ────
 function buildGeniusPrompt(repoPath, repoName) {
   const files = [];
-  const MAX_FILE_CONTENT_HTML = 15000;
-  const MAX_FILE_CONTENT_OTHER = 6000;
-  const MAX_TOTAL_CHARS = 80000;
+  const MAX_FILE_CONTENT_HTML = 12000;
+  const MAX_TOTAL_CHARS = 30000;
   let totalChars = 0;
 
   const walk = (dir) => {
@@ -42,12 +41,11 @@ function buildGeniusPrompt(repoPath, repoName) {
         walk(full);
       } else if (entry.isFile()) {
         const ext = path.extname(entry.name).toLowerCase();
-        // Include common web extensions; you can add more (e.g., .php, .vue, .jsx) if needed
-        if (['.html','.htm','.css','.js','.md','.txt','.json','.xml'].includes(ext)) {
-          const limit = ext === '.html' || ext === '.htm' ? MAX_FILE_CONTENT_HTML : MAX_FILE_CONTENT_OTHER;
+        // Only include HTML files – that's where meta and schema go
+        if (['.html', '.htm'].includes(ext)) {
           let content = fs.readFileSync(full, 'utf-8');
-          if (content.length > limit) {
-            content = content.substring(0, limit) + '\n... (truncated) ...';
+          if (content.length > MAX_FILE_CONTENT_HTML) {
+            content = content.substring(0, MAX_FILE_CONTENT_HTML) + '\n... (truncated) ...';
           }
           files.push({ path: rel, content });
           totalChars += content.length;
@@ -58,46 +56,54 @@ function buildGeniusPrompt(repoPath, repoName) {
   walk(repoPath);
   const fileList = files.map(f => `### FILE: ${f.path} ###\n${f.content}`).join('\n\n');
 
-  return `You are a world‑class SEO and Answer Engine Optimization (AEO) strategist. You must analyse the website repository "${repoName}" and produce a strategic report and a list of file modifications that **ONLY add or improve metadata and structured data** — you MUST NOT change any visible content, text, images, scripts, styles, or layout.
+  return `You are an SEO/AEO expert. Analyse the HTML files below and return ONLY valid JSON.
 
-The repository files:
+The repository is "${repoName}". Files:
 ${fileList}
 
-## YOUR MISSION
-Return a JSON object with two keys:
+## INSTRUCTIONS
+Return a JSON object with exactly two keys:
+1. "strategicReport": a short (max 300 words) analysis with score, gaps, and opportunities.
+2. "modifications": an array of objects { "path": "relative/path.html", "content": "full new HTML content" }.
 
-1. "strategicReport": A detailed, human‑readable analysis (plain text) covering:
-   - Overall SEO/AEO health score (0‑100) and grade.
-   - Entity and topic extraction.
-   - Structured data gaps and opportunities.
-   - Featured snippet and voice search potential.
-   - Predicted ranking improvements and timeline.
+### RULES FOR MODIFICATIONS
+- DO NOT change any visible text, images, scripts, styles, or layout.
+- ONLY add or improve:
+  - <title> and <meta name="description">
+  - Open Graph / Twitter Card meta tags
+  - canonical, viewport, author, date meta
+  - missing alt attributes on images (add descriptive text)
+  - fix heading hierarchy (wrap existing text in correct <h1>–<h6> – never change wording)
+  - add JSON‑LD schema.org inside <script type="application/ld+json">: at minimum Organization and WebSite, plus any relevant types (Article, FAQ, HowTo, etc.) based on the page content.
+- The content must be the original file with ONLY these additions.
 
-2. "modifications": An array of file changes. Each object has:
-   - "path": relative file path
-   - "content": the COMPLETE new content of the file.
+Return ONLY the JSON – no markdown, no extra text, no explanation.
 
-### STRICT RULES FOR MODIFICATIONS
-- **DO NOT delete, alter, or replace any existing textual content, images, scripts, styles, or layout.**
-- You may ONLY **add** or **improve** the following, **while keeping all original content exactly as it is**:
-    • Add or optimise <title> and <meta name="description"> (if missing or weak).
-    • Add or enhance Open Graph and Twitter Card meta tags.
-    • Add canonical, viewport, author, and date meta tags if missing.
-    • Add missing alt attributes to images with descriptive text (but do not change existing alt texts, only add if empty).
-    • Fix heading hierarchy: if a block of text is meant to be a heading but is wrapped in <p> or <div>, wrap the **exact same text** in the correct <h1>–<h6> tag. Never change the wording.
-    • **Add JSON‑LD structured data (schema.org)** inside <script type="application/ld+json">. Include all relevant types: Organization, WebSite, BreadcrumbList, Article, FAQ, HowTo, Speakable (for voice), LocalBusiness, Product, Review, etc. Use the existing site content to populate the schema, but do not alter that content.
-- **Never** rewrite paragraphs, change images, modify CSS, or touch JavaScript.
-- The output "content" must be the **original file with ONLY the above additions/improvements**. The file must remain fully valid and functional.
-
-Example structure:
+Example:
 {
-  "strategicReport": "Score: 82 (A). ...",
+  "strategicReport": "Score: 75 (B). …",
   "modifications": [
-    {"path": "index.html", "content": "<!DOCTYPE html><html>... (original content plus added meta and schema) ...</html>"}
+    {"path": "index.html", "content": "<!DOCTYPE html>…</html>"}
   ]
+}`;
 }
 
-Return ONLY the JSON object — no markdown, no extra text.`;
+// ──── Fallback schema generator (if AI fails) ────
+function generateBasicSchema(htmlContent, url) {
+  const siteName = path.basename(url).replace('.html', '') || 'My Website';
+  const org = {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "name": siteName,
+    "url": url
+  };
+  const website = {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "name": siteName,
+    "url": url
+  };
+  return `<script type="application/ld+json">${JSON.stringify(org)}</script>\n<script type="application/ld+json">${JSON.stringify(website)}</script>`;
 }
 
 // ──── SSE Helpers ────
@@ -105,7 +111,7 @@ function sendSSE(res, event, data) {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
-// ──── JSON extraction ────
+// ──── JSON extraction (robust) ────
 function extractJSONObject(text) {
   let cleaned = text.replace(/```json|```/g, '').trim();
   const start = cleaned.indexOf('{');
@@ -117,15 +123,14 @@ function extractJSONObject(text) {
   return null;
 }
 
-// ──── Safety check (preserves content) ────
+// ──── Safety check ────
 function isSafeMod(filePath, newContent) {
   if (!fs.existsSync(filePath)) return true;
   const original = fs.readFileSync(filePath, 'utf-8');
-  // If new content is less than 40% of original, likely a deletion
   return newContent.length >= original.length * 0.4;
 }
 
-// ──── Main Job (UPDATED with better error handling) ────
+// ──── Main Job (with fallbacks) ────
 async function runOptimizationJob(jobId, repoUrl, mergeToMain) {
   const job = jobs[jobId];
   if (!job) return;
@@ -140,61 +145,81 @@ async function runOptimizationJob(jobId, repoUrl, mergeToMain) {
     await git.clone(authUrl, repoPath);
     
     job.status = 'analyzing';
-    job.log('🧠 Genius AI scanning for schema & AEO opportunities (no content changes)...');
+    job.log('🧠 Genius AI scanning for schema & meta (no content changes)...');
     const prompt = buildGeniusPrompt(repoPath, repoName);
     job.log(`Prompt prepared (${prompt.length} chars). Sending to Gemini...`);
-    
-    // Increased output tokens and timeout
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 180000); // 3 min
 
-    const result = await model.generateContent({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.3, maxOutputTokens: 20000 },
-    });
-    clearTimeout(timeout);
-    
+    let result;
+    try {
+      result = await model.generateContent({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.2, maxOutputTokens: 15000 },
+      });
+    } catch (e) {
+      throw new Error(`Gemini API error: ${e.message}`);
+    }
+
     const text = result.response.text();
     job.log(`Raw AI response length: ${text.length} chars.`);
-    job.log(`Response preview: ${text.substring(0, 1000)}...`);
 
-    if (!text || text.trim().length === 0) {
-      throw new Error('Empty AI response');
-    }
+    // Save full response for debugging
+    const debugPath = path.join(repoPath, 'AI_RAW_RESPONSE.txt');
+    fs.writeFileSync(debugPath, text, 'utf-8');
+    job.log(`📄 Full response saved to AI_RAW_RESPONSE.txt in your repo.`);
 
-    // Try to extract JSON robustly
+    // Try to parse JSON
     let data = null;
-    try {
-      data = JSON.parse(text);
-    } catch (e) {
-      data = extractJSONObject(text);
-    }
-
+    try { data = JSON.parse(text); } catch (e) {}
+    if (!data) data = extractJSONObject(text);
     if (!data) {
-      // Last resort: try to find a JSON block with regex
       const jsonMatch = text.match(/(\{[\s\S]*\})/);
-      if (jsonMatch) {
-        try {
-          data = JSON.parse(jsonMatch[1]);
-        } catch (e) {}
+      if (jsonMatch) try { data = JSON.parse(jsonMatch[1]); } catch (e) {}
+    }
+
+    // If still no JSON, fallback to manual schema injection
+    if (!data || !data.modifications || !Array.isArray(data.modifications)) {
+      job.log('⚠️ AI did not return valid JSON. Using fallback: add basic schema to all HTML files.');
+      data = { 
+        strategicReport: 'AI failed to produce structured JSON. Fallback: added basic Organization/WebSite schema.',
+        modifications: []
+      };
+      // Find all HTML files and inject basic schema
+      const htmlFiles = [];
+      const walk = (dir) => {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const full = path.join(dir, entry.name);
+          const rel = path.relative(repoPath, full);
+          if (entry.isDirectory() && !rel.startsWith('.git') && !rel.startsWith('node_modules')) {
+            walk(full);
+          } else if (entry.isFile() && /\.html?$/i.test(entry.name)) {
+            htmlFiles.push(rel);
+          }
+        }
+      };
+      walk(repoPath);
+      for (const filePath of htmlFiles) {
+        const fullPath = path.join(repoPath, filePath);
+        let content = fs.readFileSync(fullPath, 'utf-8');
+        // Only add schema if not already present
+        if (!content.includes('application/ld+json')) {
+          const url = `https://${repoName}.com/${filePath}`; // placeholder
+          const schema = generateBasicSchema(content, url);
+          // Insert before </head> or at end
+          if (content.includes('</head>')) {
+            content = content.replace('</head>', `${schema}\n</head>`);
+          } else if (content.includes('<body')) {
+            content = content.replace('<body', `${schema}\n<body`);
+          } else {
+            content = schema + '\n' + content;
+          }
+          data.modifications.push({ path: filePath, content });
+        }
       }
+      job.log(`✅ Fallback added schema to ${data.modifications.length} HTML files.`);
     }
 
-    if (!data) {
-      throw new Error('Could not extract valid JSON from AI response. Check logs for preview.');
-    }
-
-    if (!data.modifications || !Array.isArray(data.modifications) || data.modifications.length === 0) {
-      job.log('Warning: AI returned modifications array empty or missing. Falling back to report only.');
-      const report = data.strategicReport || 'No report generated.';
-      fs.writeFileSync(path.join(repoPath, 'SEO_STRATEGY_REPORT.txt'), report, 'utf-8');
-      job.log('📄 Strategic report saved, but no modifications were made (AI did not provide any).');
-      job.status = 'done';
-      job.result = { branch: null, repo: repoUrl, merged: false, report };
-      return;
-    }
-
-    // Save the strategic report
+    // Save strategic report
     const report = data.strategicReport || 'No report generated.';
     fs.writeFileSync(path.join(repoPath, 'SEO_STRATEGY_REPORT.txt'), report, 'utf-8');
 
@@ -202,13 +227,12 @@ async function runOptimizationJob(jobId, repoUrl, mergeToMain) {
     let applied = 0, skipped = 0;
     for (const mod of data.modifications) {
       if (!mod.path || typeof mod.content !== 'string') {
-        job.log(`⚠️ Skipped invalid modification entry: ${JSON.stringify(mod)}`);
         skipped++;
         continue;
       }
       const filePath = path.join(repoPath, mod.path);
       if (!isSafeMod(filePath, mod.content)) {
-        job.log(`⚠️ Skipped ${mod.path} (safety: too short, possible content deletion)`);
+        job.log(`⚠️ Skipped ${mod.path} (safety: too short)`);
         skipped++;
         continue;
       }
@@ -216,7 +240,7 @@ async function runOptimizationJob(jobId, repoUrl, mergeToMain) {
       fs.writeFileSync(filePath, mod.content, 'utf-8');
       applied++;
     }
-    job.log(`✅ Applied ${applied} changes (${skipped} skipped). Your content is untouched.`);
+    job.log(`✅ Applied ${applied} changes (${skipped} skipped).`);
 
     // Git commit
     job.status = 'committing';
@@ -241,10 +265,10 @@ async function runOptimizationJob(jobId, repoUrl, mergeToMain) {
           commit_message: '🧠 Merge schema & meta improvements'
         });
         job.result.merged = true;
-        job.log('🚀 Merged to main — live with new schema!');
-      } catch (e) { job.log(`Merge failed (maybe protected): ${e.message}`); }
+        job.log('🚀 Merged to main!');
+      } catch (e) { job.log(`Merge failed: ${e.message}`); }
     }
-    job.log('🎉 Done! Schema added, content untouched.');
+    job.log('🎉 Done!');
   } catch (err) {
     job.status = 'error';
     job.error = err.message;
@@ -276,7 +300,7 @@ app.post('/api/optimize', (req, res) => {
   if (!repoUrl?.includes('github.com')) return res.status(400).json({ error: 'Valid GitHub repo URL required' });
   const jobId = uuidv4();
   jobs[jobId] = { status: 'created', logs: [], log: (msg) => jobs[jobId].logs.push(msg) };
-  jobs[jobId].log('🧠 Genius SEO/AEO Brain – schema & meta only, no content changes');
+  jobs[jobId].log('🧠 SEO/AEO Engine – schema & meta only');
   runOptimizationJob(jobId, repoUrl, mergeToMain);
   res.json({ jobId });
 });
